@@ -1,42 +1,33 @@
 // Infrastructure Adapter: OpenAI Resume Optimization
-// Implements the domain port using the OpenAI API.
-//
-// COST STRATEGY: A single API call returns ALL requested outputs
-// (resume + optional cover letter + optional application answers)
-// in one JSON object. No redundant calls ever made.
+// Single API call produces all requested outputs.
 
 import OpenAI from 'openai';
-import type {
-  IResumeOptimizationService,
-  OptimizationOptions,
-} from '@/domain/services/IResumeOptimizationService';
+import type { IResumeOptimizationService, OptimizationOptions } from '@/domain/services/IResumeOptimizationService';
 import type { Resume } from '@/domain/entities/Resume';
 import type { JobDescription } from '@/domain/entities/JobDescription';
 import type { GenerationBundle } from '@/domain/entities/GenerationBundle';
-import {
-  validateOptimizedResume,
-} from '@/domain/entities/OptimizedResume';
+import { validateOptimizedResume } from '@/domain/entities/OptimizedResume';
 import { validateCoverLetter } from '@/domain/entities/CoverLetter';
 import { validateApplicationAnswers } from '@/domain/entities/ApplicationAnswers';
+import { validateApplicationEmail } from '@/domain/entities/ApplicationEmail';
 
-// ── System prompt ─────────────────────────────────────────────────────────────
-// Defines the base role and strict rules that apply to ALL outputs.
+// ── Base system prompt (resume always present) ─────────────────────────────
 
-const BASE_SYSTEM_PROMPT = `You are an elite career coach, resume writer, and ATS optimization expert with 15+ years of experience in talent acquisition. You produce professional job-application materials based strictly on a candidate's provided background.
+const BASE_SYSTEM_PROMPT = `You are an elite resume writer and ATS optimization expert with 15+ years of experience in recruiting and talent acquisition.
 
-## UNIVERSAL STRICT RULES (apply to EVERY output):
-1. NEVER invent or hallucinate skills, experiences, companies, dates, achievements, or personal details not present in the original resume.
-2. Only use keywords and buzzwords explicitly present in the job description AND consistent with the candidate's existing experience.
-3. You MAY rephrase and strengthen existing content to better align with the job description language.
-4. You MAY reorder resume sections to surface the most relevant experience first.
-5. The output language for ALL text values is controlled by the "targetLanguage" field in the request — translate ALL human-readable content accordingly, but always keep JSON keys in English.
+## UNIVERSAL STRICT RULES:
+1. NEVER invent or hallucinate skills, experiences, companies, dates, or achievements not present in the original resume.
+2. Only extract keywords and buzzwords explicitly mentioned in both the job description and resume, or clearly implied by existing experience.
+3. You MAY rephrase and strengthen existing bullet points to align with the job description language.
+4. You MAY reorder sections from the most relevant to the least relevant experience.
+5. You MAY enhance the professional summary using language from the job description while staying truthful.
+6. Ensure ALL output is ATS-friendly: standard section names, no tables, no columns, no special characters beyond common punctuation.
+7. Output language for ALL human-readable text is controlled by the targetLanguage instruction. Keep JSON keys in English.
 
 ## OUTPUT FORMAT:
-Respond with ONLY a single valid JSON object. No markdown fences, no preamble, no explanation.
+Respond with ONLY a valid JSON object. No markdown, no preamble.
 
-The JSON must always include the "resume" key. The "coverLetter" and "applicationAnswers" keys are only present when explicitly requested.
-
-\`\`\`
+The JSON must always contain a "resume" key:
 {
   "resume": {
     "personalInfo": {
@@ -66,66 +57,94 @@ The JSON must always include the "resume" key. The "coverLetter" and "applicatio
         "degree": "string",
         "field": "string | null",
         "location": "string | null",
-        "startDate": "string (e.g. Sep 2017)",
-        "graduationDate": "string (e.g. Jun 2021 or Present)",
+        "startDate": "string",
+        "graduationDate": "string",
         "gpa": "string | null",
         "honors": "string | null"
       }
     ],
     "skills": [
-      {
-        "name": "Category name (e.g. Programming Languages, Tools, Frameworks)",
-        "skills": ["skill1", "skill2"]
-      }
+      { "name": "Category name", "skills": ["skill1", "skill2"] }
     ],
     "certifications": [
       { "name": "string", "issuer": "string | null", "date": "string | null" }
     ],
     "projects": [
-      {
-        "name": "string",
-        "description": "string",
-        "technologies": ["string"],
-        "url": "string | null"
-      }
+      { "name": "string", "description": "string", "technologies": ["string"], "url": "string | null" }
     ],
     "languages": [
       { "language": "string", "level": "A1 | A2 | B1 | B2 | C1 | C2 | Native" }
     ],
-    "keywords": ["10-20 ATS keywords extracted from the JD and incorporated"],
+    "keywords": ["10-20 ATS keywords extracted from JD and incorporated"],
     "matchScore": 85,
     "language": "en",
     "changes": [
-      { "section": "Summary", "description": "Rewrote to emphasize leadership and cloud alignment" }
+      { "section": "Summary", "description": "Rewrote to emphasize leadership and cloud architecture alignment" }
     ]
   }
-}
-\`\`\``;
+}`;
 
-const COVER_LETTER_SCHEMA = `
+// ── Optional schema fragments — appended only when requested ───────────────
+
+const COVER_LETTER_ADDENDUM = `
+The JSON must also include a "coverLetter" key:
   "coverLetter": {
     "salutation": "e.g. Dear Hiring Manager,",
-    "opening": "Opening paragraph — hook + role statement",
+    "opening": "Opening paragraph: hook + role statement drawn from the candidate's strongest relevant achievement",
     "body": [
-      "Body paragraph 1 — connects top experiences to the role's key requirements",
-      "Body paragraph 2 — highlights a specific achievement + cultural fit (if inferable)"
+      "Body paragraph 1: connect 2-3 concrete experiences to the role's key requirements",
+      "Body paragraph 2: cultural fit / enthusiasm if inferable from JD (optional)"
     ],
-    "closing": "Closing paragraph — enthusiasm + call to action",
+    "closing": "Closing paragraph: enthusiasm + call to action",
     "signOff": "e.g. Sincerely,",
-    "candidateName": "Full name from the resume",
+    "candidateName": "Full name from resume personalInfo",
     "language": "ISO code matching targetLanguage"
-  }`;
+  }
 
-const APP_ANSWERS_SCHEMA = `
+## COVER LETTER RULES:
+- Write in a natural human voice — avoid clichés like "I am writing to express my interest".
+- Every claim must be grounded in the candidate's resume. Never invent achievements.
+- Maximum 3-4 short paragraphs total.
+- Reference the company name if present in the JD.`;
+
+const APP_ANSWERS_ADDENDUM = `
+The JSON must also include an "applicationAnswers" key:
   "applicationAnswers": {
     "answers": [
       {
-        "question": "Exact question as provided",
-        "answer": "Natural, specific, professional answer grounded strictly in the candidate's background. 2-5 sentences."
+        "question": "Exact question as provided by the user",
+        "answer": "Natural, specific, professional answer (2-5 sentences) grounded strictly in the candidate's background. Never fabricate details."
       }
     ],
     "language": "ISO code matching targetLanguage"
-  }`;
+  }
+
+## APPLICATION ANSWER RULES:
+- Answer each question specifically and tie it to concrete resume evidence.
+- If a question asks for something not present in the resume, give the most honest constructive answer without fabricating.
+- Keep each answer to 2-5 sentences.`;
+
+const APP_EMAIL_ADDENDUM = `
+The JSON must also include an "applicationEmail" key:
+  "applicationEmail": {
+    "subject": "Concise specific subject line e.g. Application for [Role] – [Candidate Name]",
+    "salutation": "e.g. Dear Hiring Manager, (or Dear [recipientName], if provided)",
+    "paragraphs": [
+      "Opening: state the specific role and lead with a compelling hook from the candidate's strongest relevant achievement.",
+      "Body: connect 2-3 concrete experiences or measurable results from the resume to the role's key requirements. Be specific — cite real numbers.",
+      "Closing: express genuine enthusiasm, mention the attached resume, clear call to action."
+    ],
+    "signOff": "e.g. Best regards,",
+    "senderName": "Candidate full name from personalInfo",
+    "senderEmail": "Candidate email from personalInfo",
+    "language": "ISO code matching targetLanguage"
+  }
+
+## EMAIL RULES:
+- Natural human voice — no generic AI filler phrases.
+- Every claim grounded in the candidate's resume. Never invent achievements.
+- Exactly 3 paragraphs. Concise.
+- Mirror the register of the JD (formal vs conversational).`;
 
 export class OpenAIResumeAdapter implements IResumeOptimizationService {
   private readonly client: OpenAI;
@@ -134,9 +153,7 @@ export class OpenAIResumeAdapter implements IResumeOptimizationService {
 
   constructor() {
     const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      throw new Error('OPENAI_API_KEY environment variable is not set');
-    }
+    if (!apiKey) throw new Error('OPENAI_API_KEY environment variable is not set');
     this.client = new OpenAI({ apiKey });
     this.model = process.env.OPENAI_MODEL ?? 'gpt-4o';
     this.maxTokens = parseInt(process.env.OPENAI_MAX_TOKENS ?? '4096', 10);
@@ -147,88 +164,59 @@ export class OpenAIResumeAdapter implements IResumeOptimizationService {
     jobDescription: JobDescription,
     options?: OptimizationOptions
   ): Promise<GenerationBundle> {
-    const systemPrompt = this.buildSystemPrompt(options);
-    const userPrompt = this.buildUserPrompt(resume, jobDescription, options);
-
     const response = await this.client.chat.completions.create({
       model: this.model,
       max_tokens: this.maxTokens,
       temperature: 0.3,
       messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
+        { role: 'system', content: this.buildSystemPrompt(options) },
+        { role: 'user',   content: this.buildUserPrompt(resume, jobDescription, options) },
       ],
       response_format: { type: 'json_object' },
     });
 
     const rawContent = response.choices[0]?.message?.content;
-    if (!rawContent) {
-      throw new Error('OpenAI returned an empty response');
-    }
+    if (!rawContent) throw new Error('OpenAI returned an empty response');
 
     let parsed: Record<string, unknown>;
     try {
       parsed = JSON.parse(rawContent);
     } catch {
-      throw new Error(
-        `Failed to parse AI response as JSON: ${rawContent.slice(0, 200)}`
-      );
+      throw new Error(`Failed to parse AI response as JSON: ${rawContent.slice(0, 200)}`);
     }
 
-    return this.buildBundle(parsed, options);
+    return this.assembleBundle(parsed, options);
   }
 
-  // ── Private helpers ────────────────────────────────────────────────────────
+  // ── Private helpers ──────────────────────────────────────────────────────
 
   private buildSystemPrompt(options?: OptimizationOptions): string {
-    const needsCoverLetter = options?.generateCoverLetter === true;
-    const needsAnswers = Boolean(options?.applicationQuestions?.trim());
-
-    if (!needsCoverLetter && !needsAnswers) {
-      return BASE_SYSTEM_PROMPT;
-    }
-
-    // Extend the base schema with the requested optional sections
-    const extraSchemas: string[] = [];
-    if (needsCoverLetter) extraSchemas.push(COVER_LETTER_SCHEMA);
-    if (needsAnswers) extraSchemas.push(APP_ANSWERS_SCHEMA);
-
-    const extraNote = `
-The JSON must also include the following additional keys alongside "resume":
-{${extraSchemas.join(',\n')}}
-
-## COVER LETTER RULES (when requested):
-- Write in a natural, human voice — avoid AI-sounding filler phrases.
-- Ground every claim in the candidate's real experience.
-- Reference the specific role and company if their name appears in the JD.
-- Keep the total length to 3–4 short paragraphs.
-
-## APPLICATION ANSWER RULES (when requested):
-- Answer each question specifically and professionally.
-- Tie answers to concrete experience from the candidate's resume.
-- NEVER invent details. If a question asks for something not in the resume, give the most honest and constructive answer possible without fabricating.
-- Keep each answer to 2–5 sentences unless the question clearly requires more.`;
-
-    return BASE_SYSTEM_PROMPT + extraNote;
+    let prompt = BASE_SYSTEM_PROMPT;
+    if (options?.generateCoverLetter)                prompt += COVER_LETTER_ADDENDUM;
+    if (options?.applicationQuestions?.trim())       prompt += APP_ANSWERS_ADDENDUM;
+    if (options?.generateApplicationEmail)           prompt += APP_EMAIL_ADDENDUM;
+    return prompt;
   }
 
   private buildUserPrompt(
     resume: Resume,
     jobDescription: JobDescription,
-    options?: OptimizationOptions
+    options?: OptimizationOptions,
   ): string {
     const lang = options?.targetLanguage;
-    const languageInstruction =
-      lang && lang !== 'en'
-        ? `\n\n⚠️ LANGUAGE REQUIREMENT: Write ALL human-readable text values in language code "${lang}". This applies to the resume, cover letter, and application answers equally. Keep all JSON keys in English.`
-        : '';
+    const languageNote = lang && lang !== 'en'
+      ? `\n\n⚠️ LANGUAGE: Write ALL human-readable text values in language "${lang}". Keep JSON keys in English.`
+      : '';
 
-    const questionsBlock =
-      options?.applicationQuestions?.trim()
-        ? `\n\n## APPLICATION QUESTIONS TO ANSWER:\n\`\`\`\n${options.applicationQuestions.trim()}\n\`\`\``
-        : '';
+    const questionsBlock = options?.applicationQuestions?.trim()
+      ? `\n\n## APPLICATION QUESTIONS TO ANSWER:\n\`\`\`\n${options.applicationQuestions.trim()}\n\`\`\``
+      : '';
 
-    return `## CANDIDATE'S CURRENT RESUME:
+    const recipientNote = options?.generateApplicationEmail && options.recipientName
+      ? `\n\nEMAIL RECIPIENT: Address the email to "${options.recipientName}".`
+      : '';
+
+    return `## ORIGINAL RESUME:
 \`\`\`
 ${resume.rawText}
 \`\`\`
@@ -237,29 +225,24 @@ ${resume.rawText}
 \`\`\`
 ${jobDescription.rawText}
 \`\`\`
-${questionsBlock}${languageInstruction}
+${questionsBlock}${languageNote}${recipientNote}
 
 Produce the complete JSON output now.`;
   }
 
-  private buildBundle(
+  private assembleBundle(
     parsed: Record<string, unknown>,
-    options?: OptimizationOptions
+    options?: OptimizationOptions,
   ): GenerationBundle {
     const bundle: GenerationBundle = {
       resume: validateOptimizedResume(parsed.resume),
     };
-
-    if (options?.generateCoverLetter && parsed.coverLetter) {
+    if (options?.generateCoverLetter && parsed.coverLetter)
       bundle.coverLetter = validateCoverLetter(parsed.coverLetter);
-    }
-
-    if (options?.applicationQuestions?.trim() && parsed.applicationAnswers) {
-      bundle.applicationAnswers = validateApplicationAnswers(
-        parsed.applicationAnswers
-      );
-    }
-
+    if (options?.applicationQuestions?.trim() && parsed.applicationAnswers)
+      bundle.applicationAnswers = validateApplicationAnswers(parsed.applicationAnswers);
+    if (options?.generateApplicationEmail && parsed.applicationEmail)
+      bundle.applicationEmail = validateApplicationEmail(parsed.applicationEmail);
     return bundle;
   }
 }

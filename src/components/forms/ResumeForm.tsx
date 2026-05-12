@@ -11,6 +11,8 @@ import {
   AlertCircle,
   Mail,
   HelpCircle,
+  Send,
+  User,
 } from 'lucide-react';
 
 export interface FormData {
@@ -20,6 +22,8 @@ export interface FormData {
   language: string;
   generateCoverLetter: boolean;
   applicationQuestions: string;
+  generateApplicationEmail: boolean;
+  recipientName: string;
 }
 
 interface ResumeFormProps {
@@ -41,25 +45,43 @@ const LANGUAGE_OPTIONS = [
   { value: 'zh', label: 'Chinese (Simplified)' },
 ];
 
+function ToggleSwitch({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={onChange}
+      className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:ring-offset-2 focus:ring-offset-background ${checked ? 'bg-accent' : 'bg-muted'}`}
+    >
+      <span
+        aria-hidden="true"
+        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${checked ? 'translate-x-5' : 'translate-x-0'}`}
+      />
+    </button>
+  );
+}
+
 export function ResumeForm({ onSubmit, isLoading }: ResumeFormProps) {
   const [resumeFile, setResumeFile] = useState<File | null>(null);
   const [resumeText, setResumeText] = useState('');
   const [jobDescription, setJobDescription] = useState('');
   const [language, setLanguage] = useState('en');
   const [generateCoverLetter, setGenerateCoverLetter] = useState(false);
-  const [applicationQuestions, setApplicationQuestions] = useState('');
+  const [applicationQuestions, setAppQuestions] = useState('');
+  const [generateApplicationEmail, setGenerateEmail] = useState(false);
+  const [recipientName, setRecipientName] = useState('');
   const [isDragOver, setIsDragOver] = useState(false);
   const [inputMode, setInputMode] = useState<'file' | 'text'>('file');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [showLangDropdown, setShowLangDropdown] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const handleFileDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(false);
-    const file = e.dataTransfer.files[0];
-    if (file) handleFileSelect(file);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleFileSelect = (file: File) => {
     const allowed = ['application/pdf', 'text/plain', 'text/markdown'];
@@ -82,20 +104,23 @@ export function ResumeForm({ onSubmit, isLoading }: ResumeFormProps) {
     setResumeFile(file);
   };
 
+  const handleFileDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    const file = e.dataTransfer.files[0];
+    if (file) handleFileSelect(file);
+  }, []); // eslint-disable-line
+
   const validate = (): boolean => {
-    const newErrors: Record<string, string> = {};
-    if (inputMode === 'file' && !resumeFile) {
-      newErrors.resume = 'Please upload your resume';
-    }
-    if (inputMode === 'text' && resumeText.trim().length < 50) {
-      newErrors.resume = 'Resume text must be at least 50 characters';
-    }
-    if (jobDescription.trim().length < 30) {
-      newErrors.jobDescription =
-        'Please provide a more complete job description';
-    }
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    const next: Record<string, string> = {};
+    if (inputMode === 'file' && !resumeFile)
+      next.resume = 'Please upload your resume';
+    if (inputMode === 'text' && resumeText.trim().length < 50)
+      next.resume = 'Resume text must be at least 50 characters';
+    if (jobDescription.trim().length < 30)
+      next.jobDescription = 'Please provide a more complete job description';
+    setErrors(next);
+    return Object.keys(next).length === 0;
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -108,18 +133,21 @@ export function ResumeForm({ onSubmit, isLoading }: ResumeFormProps) {
       language,
       generateCoverLetter,
       applicationQuestions,
+      generateApplicationEmail,
+      recipientName,
     });
   };
 
+  const extrasCount = [
+    generateCoverLetter,
+    applicationQuestions.trim(),
+    generateApplicationEmail,
+  ].filter(Boolean).length;
   const selectedLang = LANGUAGE_OPTIONS.find((l) => l.value === language);
-
-  // Count how many optional extras are enabled for button label
-  const extraCount =
-    (generateCoverLetter ? 1 : 0) + (applicationQuestions.trim() ? 1 : 0);
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
-      {/* ── Resume Input Toggle ─────────────────────────────────────────── */}
+      {/* ── Resume input ──────────────────────────────────────────────── */}
       <div>
         <div className="flex items-center gap-1 mb-3 p-1 bg-muted/50 rounded-lg w-fit">
           {(['file', 'text'] as const).map((mode) => (
@@ -127,11 +155,7 @@ export function ResumeForm({ onSubmit, isLoading }: ResumeFormProps) {
               key={mode}
               type="button"
               onClick={() => setInputMode(mode)}
-              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all duration-200 ${
-                inputMode === mode
-                  ? 'bg-accent text-accent-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
+              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all duration-200 ${inputMode === mode ? 'bg-accent text-accent-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
             >
               {mode === 'file' ? 'Upload File' : 'Paste Text'}
             </button>
@@ -147,13 +171,7 @@ export function ResumeForm({ onSubmit, isLoading }: ResumeFormProps) {
             }}
             onDragLeave={() => setIsDragOver(false)}
             onClick={() => fileInputRef.current?.click()}
-            className={`relative cursor-pointer rounded-xl border-2 border-dashed transition-all duration-200 p-8 text-center group ${
-              isDragOver
-                ? 'border-accent bg-accent/5 scale-[1.01]'
-                : resumeFile
-                  ? 'border-accent/40 bg-accent/5'
-                  : 'border-border hover:border-accent/40 hover:bg-muted/30'
-            }`}
+            className={`relative cursor-pointer rounded-xl border-2 border-dashed transition-all duration-200 p-8 text-center group ${isDragOver ? 'border-accent bg-accent/5 scale-[1.01]' : resumeFile ? 'border-accent/40 bg-accent/5' : 'border-border hover:border-accent/40 hover:bg-muted/30'}`}
           >
             <input
               ref={fileInputRef}
@@ -219,7 +237,6 @@ export function ResumeForm({ onSubmit, isLoading }: ResumeFormProps) {
             className="w-full rounded-xl bg-muted/50 border border-border/60 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-accent/50 focus:border-accent/50 resize-none p-4 font-mono transition-colors"
           />
         )}
-
         {errors.resume && (
           <p className="mt-2 text-xs text-destructive flex items-center gap-1">
             <AlertCircle size={12} /> {errors.resume}
@@ -227,7 +244,7 @@ export function ResumeForm({ onSubmit, isLoading }: ResumeFormProps) {
         )}
       </div>
 
-      {/* ── Job Description ─────────────────────────────────────────────── */}
+      {/* ── Job description ───────────────────────────────────────────── */}
       <div>
         <label className="block text-sm font-medium text-foreground mb-2">
           Job Description <span className="text-accent">*</span>
@@ -248,24 +265,20 @@ export function ResumeForm({ onSubmit, isLoading }: ResumeFormProps) {
             <span />
           )}
           <span
-            className={`text-xs ${
-              jobDescription.length > 9000
-                ? 'text-destructive'
-                : 'text-muted-foreground'
-            }`}
+            className={`text-xs ${jobDescription.length > 9000 ? 'text-destructive' : 'text-muted-foreground'}`}
           >
             {jobDescription.length.toLocaleString()}/10,000
           </span>
         </div>
       </div>
 
-      {/* ── Language Selector ───────────────────────────────────────────── */}
+      {/* ── Language selector ─────────────────────────────────────────── */}
       <div>
         <label className="block text-sm font-medium text-foreground mb-1">
           Output Language
         </label>
         <p className="text-xs text-muted-foreground mb-2">
-          Applies to resume, cover letter, and application answers
+          Applies to resume, cover letter, answers and email
         </p>
         <div className="relative">
           <button
@@ -276,12 +289,9 @@ export function ResumeForm({ onSubmit, isLoading }: ResumeFormProps) {
             <span>{selectedLang?.label}</span>
             <ChevronDown
               size={16}
-              className={`text-muted-foreground transition-transform duration-200 ${
-                showLangDropdown ? 'rotate-180' : ''
-              }`}
+              className={`text-muted-foreground transition-transform duration-200 ${showLangDropdown ? 'rotate-180' : ''}`}
             />
           </button>
-
           {showLangDropdown && (
             <div className="absolute top-full left-0 right-0 mt-1 z-50 glass-card overflow-hidden">
               <div className="max-h-52 overflow-y-auto py-1">
@@ -293,11 +303,7 @@ export function ResumeForm({ onSubmit, isLoading }: ResumeFormProps) {
                       setLanguage(opt.value);
                       setShowLangDropdown(false);
                     }}
-                    className={`w-full text-left px-4 py-2.5 text-sm transition-colors ${
-                      language === opt.value
-                        ? 'bg-accent/10 text-accent'
-                        : 'text-foreground hover:bg-muted/60'
-                    }`}
+                    className={`w-full text-left px-4 py-2.5 text-sm transition-colors ${language === opt.value ? 'bg-accent/10 text-accent' : 'text-foreground hover:bg-muted/60'}`}
                   >
                     {opt.label}
                   </button>
@@ -308,68 +314,46 @@ export function ResumeForm({ onSubmit, isLoading }: ResumeFormProps) {
         </div>
       </div>
 
-      {/* ── Optional Extras ─────────────────────────────────────────────── */}
-      <div className="space-y-4 pt-1">
+      {/* ── Optional extras ───────────────────────────────────────────── */}
+      <div className="space-y-3">
         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
           Optional Extras
         </p>
 
-        {/* Cover Letter Toggle */}
-        <div className="flex items-center justify-between p-4 rounded-xl bg-muted/30 border border-border/50 hover:border-border/80 transition-colors">
-          <div className="flex items-center gap-3">
-            <div
-              className={`p-2 rounded-lg transition-colors ${
-                generateCoverLetter
-                  ? 'bg-accent/15 text-accent'
-                  : 'bg-muted/60 text-muted-foreground'
-              }`}
-            >
-              <Mail size={16} />
+        {/* 1. Cover letter toggle */}
+        <div
+          className={`rounded-xl border transition-colors duration-200 ${generateCoverLetter ? 'border-accent/30 bg-accent/5' : 'border-border/50 bg-muted/20 hover:border-border/70'}`}
+        >
+          <div className="flex items-center justify-between px-4 py-3.5">
+            <div className="flex items-center gap-3">
+              <div
+                className={`p-2 rounded-lg transition-colors ${generateCoverLetter ? 'bg-accent/15 text-accent' : 'bg-muted/60 text-muted-foreground'}`}
+              >
+                <Mail size={16} />
+              </div>
+              <div>
+                <p className="text-sm font-medium text-foreground">
+                  Generate Cover Letter
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  AI-written, tailored to the role and your background
+                </p>
+              </div>
             </div>
-            <div>
-              <p className="text-sm font-medium text-foreground">
-                Generate Cover Letter
-              </p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                AI-written, tailored to the role and your background
-              </p>
-            </div>
-          </div>
-
-          {/* Toggle switch */}
-          <button
-            type="button"
-            role="switch"
-            aria-checked={generateCoverLetter}
-            onClick={() => setGenerateCoverLetter((v) => !v)}
-            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:ring-offset-2 focus:ring-offset-background ${
-              generateCoverLetter ? 'bg-accent' : 'bg-muted'
-            }`}
-          >
-            <span
-              aria-hidden="true"
-              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                generateCoverLetter ? 'translate-x-5' : 'translate-x-0'
-              }`}
+            <ToggleSwitch
+              checked={generateCoverLetter}
+              onChange={() => setGenerateCoverLetter((v) => !v)}
             />
-          </button>
+          </div>
         </div>
 
-        {/* Application Questions Textarea */}
+        {/* 2. Application questions textarea */}
         <div
-          className={`rounded-xl border transition-all duration-200 overflow-hidden ${
-            applicationQuestions.trim()
-              ? 'border-accent/30 bg-accent/3'
-              : 'border-border/50 bg-muted/30'
-          }`}
+          className={`rounded-xl border transition-all duration-200 overflow-hidden ${applicationQuestions.trim() ? 'border-accent/30 bg-accent/5' : 'border-border/50 bg-muted/20 hover:border-border/70'}`}
         >
-          <div className="flex items-center gap-3 px-4 pt-4 pb-2">
+          <div className="flex items-center gap-3 px-4 pt-3.5 pb-2">
             <div
-              className={`p-2 rounded-lg transition-colors ${
-                applicationQuestions.trim()
-                  ? 'bg-accent/15 text-accent'
-                  : 'bg-muted/60 text-muted-foreground'
-              }`}
+              className={`p-2 rounded-lg transition-colors ${applicationQuestions.trim() ? 'bg-accent/15 text-accent' : 'bg-muted/60 text-muted-foreground'}`}
             >
               <HelpCircle size={16} />
             </div>
@@ -378,14 +362,14 @@ export function ResumeForm({ onSubmit, isLoading }: ResumeFormProps) {
                 Application Questions
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Paste company-specific questions — AI will answer them using
-                your background
+                Paste company-specific questions — AI answers them from your
+                background
               </p>
             </div>
           </div>
           <textarea
             value={applicationQuestions}
-            onChange={(e) => setApplicationQuestions(e.target.value)}
+            onChange={(e) => setAppQuestions(e.target.value)}
             placeholder={
               'e.g.:\nWhy do you want to work here?\nDescribe a challenging project you led.\nWhat are your salary expectations?'
             }
@@ -393,9 +377,60 @@ export function ResumeForm({ onSubmit, isLoading }: ResumeFormProps) {
             className="w-full bg-transparent border-0 border-t border-border/30 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none resize-none px-4 py-3 transition-colors"
           />
         </div>
+
+        {/* 3. Application email toggle + optional recipient */}
+        <div
+          className={`rounded-xl border transition-colors duration-200 ${generateApplicationEmail ? 'border-accent/30 bg-accent/5' : 'border-border/50 bg-muted/20 hover:border-border/70'}`}
+        >
+          <div className="flex items-center justify-between px-4 py-3.5">
+            <div className="flex items-center gap-3">
+              <div
+                className={`p-2 rounded-lg transition-colors ${generateApplicationEmail ? 'bg-accent/15 text-accent' : 'bg-muted/60 text-muted-foreground'}`}
+              >
+                <Send size={16} />
+              </div>
+              <div>
+                <p className="text-sm font-medium text-foreground">
+                  Generate Application Email
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Professional email to send alongside your resume
+                </p>
+              </div>
+            </div>
+            <ToggleSwitch
+              checked={generateApplicationEmail}
+              onChange={() => setGenerateEmail((v) => !v)}
+            />
+          </div>
+
+          {generateApplicationEmail && (
+            <div className="px-4 pb-4 border-t border-border/30 pt-3">
+              <label className="block text-xs font-medium text-muted-foreground mb-1.5">
+                Recipient name{' '}
+                <span className="font-normal text-muted-foreground/60">
+                  (optional — uses "Hiring Manager" if blank)
+                </span>
+              </label>
+              <div className="relative">
+                <User
+                  size={14}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
+                />
+                <input
+                  type="text"
+                  value={recipientName}
+                  onChange={(e) => setRecipientName(e.target.value)}
+                  placeholder='e.g. "Sarah Chen"'
+                  className="w-full pl-9 pr-4 py-2.5 rounded-lg bg-muted/50 border border-border/60 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-accent/50 focus:border-accent/50 transition-colors"
+                />
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* ── Submit Button ───────────────────────────────────────────────── */}
+      {/* ── Submit ────────────────────────────────────────────────────── */}
       <button
         type="submit"
         disabled={isLoading}
@@ -403,16 +438,15 @@ export function ResumeForm({ onSubmit, isLoading }: ResumeFormProps) {
       >
         {isLoading ? (
           <>
-            <Loader2 size={18} className="animate-spin" />
-            Analyzing & Optimizing...
+            <Loader2 size={18} className="animate-spin" /> Analyzing &
+            Optimizing...
           </>
         ) : (
           <>
             <Sparkles size={18} />
-            Generate
-            {extraCount > 0
-              ? ` Resume + ${extraCount} Extra${extraCount > 1 ? 's' : ''}`
-              : ' Tailored Resume'}
+            {extrasCount > 0
+              ? `Generate Resume + ${extrasCount} Extra${extrasCount > 1 ? 's' : ''}`
+              : 'Generate Tailored Resume'}
           </>
         )}
       </button>

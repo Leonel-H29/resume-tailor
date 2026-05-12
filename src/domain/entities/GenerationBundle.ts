@@ -1,19 +1,17 @@
 // Domain Entity: GenerationBundle
 // Aggregates all outputs from a single generation request.
-// Keeping cover letter and answers as separate entities preserves
-// single-responsibility and makes each independently testable / replaceable.
+// resume is always present; all other fields are optional and only
+// populated when explicitly requested — keeping the port signature stable
+// as new optional outputs are added in the future.
 
 import type { OptimizedResume } from './OptimizedResume';
 import type { CoverLetter } from './CoverLetter';
 import type { ApplicationAnswers } from './ApplicationAnswers';
+import type { ApplicationEmail } from './ApplicationEmail';
 
 export interface GenerationBundle {
-  /** Always present — the core optimized resume */
   resume: OptimizedResume;
-
-  /** Present only when the user requested cover letter generation */
   coverLetter?: CoverLetter;
-
-  /** Present only when the user provided application questions */
   applicationAnswers?: ApplicationAnswers;
+  applicationEmail?: ApplicationEmail;
 }

@@ -1,40 +1,30 @@
 // Domain Service Interface (Port)
-// Defines the contract that any AI adapter must implement.
-// This keeps the domain layer free from infrastructure concerns.
-
 import type { Resume } from '../entities/Resume';
 import type { JobDescription } from '../entities/JobDescription';
 import type { GenerationBundle } from '../entities/GenerationBundle';
 
 export interface OptimizationOptions {
-  /** Target output language — "auto" detects from JD, "en" is the default */
+  /** "en" (default) | "auto" | ISO-639-1 code — applies to ALL outputs */
   targetLanguage?: string;
-
-  /** Preserve the original resume section order when already ATS-friendly */
   preserveStructure?: boolean;
-
-  /** Weight keyword injection when rewriting experience bullets */
   emphasizeKeywords?: boolean;
-
-  // ── New optional generation flags ─────────────────────────────────────────
-
-  /** When true, include a tailored cover letter in the bundle */
+  /** Include a tailored cover letter in the bundle */
   generateCoverLetter?: boolean;
-
   /**
-   * Raw text containing one or more application questions (newline-separated).
-   * When provided, the AI will generate answers grounded in the candidate's background.
+   * Newline-separated application questions.
+   * When provided, AI-generated answers are included in the bundle.
    */
   applicationQuestions?: string;
+  /** Include a ready-to-send application email in the bundle */
+  generateApplicationEmail?: boolean;
+  /** Personalises the email salutation — falls back to "Hiring Manager" */
+  recipientName?: string;
 }
 
 export interface IResumeOptimizationService {
   /**
-   * Produces a GenerationBundle from a resume and job description.
-   * The bundle always contains an optimized resume; cover letter and
-   * application answers are included only when requested via options.
-   *
-   * Cost note: all requested outputs are generated in a single API call.
+   * Returns a GenerationBundle from a single API call.
+   * All optional outputs are generated in the same request as the resume.
    */
   optimize(
     resume: Resume,
