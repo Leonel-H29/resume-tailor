@@ -1,0 +1,143 @@
+// Interface Layer: API Route
+// POST /api/generate
+//
+// Accepts multipart/form-data, delegates to the use-case, and returns
+// the generation bundle (resume JSON + optional cover letter + optional answers + PDF).
+
+import { type NextRequest, NextResponse } from 'next/server';
+import { GenerateResumeUseCase } from '@/application/use-cases/generateResume';
+import { OpenAIResumeAdapter } from '@/infrastructure/ai/openaiResumeAdapter';
+import {
+  generateResumePDF,
+  pdfToBase64,
+} from '@/infrastructure/pdf/pdfGenerator';
+import {
+  parseResumeFile,
+  validateFileSize,
+  validateMimeType,
+} from '@/infrastructure/parsers/resumeParser';
+
+export const maxDuration = 60;
+
+export async function POST(req: NextRequest) {
+  try {
+    const formData = await req.formData();
+
+    // ── Extract all form fields ──────────────────────────────────────────────
+    const jobDescriptionText = formData.get('jobDescription') as string;
+    const languagePreference = (formData.get('language') as string) ?? 'en';
+    const resumeFile = formData.get('resumeFile') as File | null;
+    const resumeText = formData.get('resumeText') as string | null;
+    const generateCoverLetter =
+      (formData.get('generateCoverLetter') as string) === 'true';
+    const applicationQuestions =
+      (formData.get('applicationQuestions') as string | null) ?? '';
+
+    // ── Validate job description ─────────────────────────────────────────────
+    if (!jobDescriptionText?.trim()) {
+      return NextResponse.json(
+        { success: false, error: 'Job description is required' },
+        { status: 400 }
+      );
+    }
+    if (jobDescriptionText.trim().length > 10_000) {
+      return NextResponse.json(
+        { success: false, error: 'Job description exceeds 10,000 character limit' },
+        { status: 400 }
+      );
+    }
+
+    // ── Parse resume ─────────────────────────────────────────────────────────
+    let parsedResumeText = '';
+    let resumeFileName: string | undefined;
+    let resumeFileType: 'pdf' | 'text' = 'text';
+
+    if (resumeFile && resumeFile.size > 0) {
+      const mimeType = resumeFile.type || 'application/octet-stream';
+      try {
+        validateMimeType(mimeType);
+        const buffer = Buffer.from(await resumeFile.arrayBuffer());
+        validateFileSize(buffer);
+        const parsed = await parseResumeFile(buffer, resumeFile.name, mimeType);
+        parsedResumeText = parsed.text;
+        resumeFileName = parsed.fileName;
+        resumeFileType = parsed.fileType;
+      } catch (parseError) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Failed to parse resume file: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`,
+          },
+          { status: 400 }
+        );
+      }
+    } else if (resumeText?.trim()) {
+      parsedResumeText = resumeText.trim();
+    } else {
+      return NextResponse.json(
+        { success: false, error: 'Please upload a resume file or paste resume text' },
+        { status: 400 }
+      );
+    }
+
+    // Guard against extremely long resumes to keep token usage reasonable
+    if (parsedResumeText.length > 15_000) {
+      parsedResumeText = parsedResumeText.slice(0, 15_000);
+    }
+
+    // ── Execute use-case ─────────────────────────────────────────────────────
+    const useCase = new GenerateResumeUseCase(new OpenAIResumeAdapter());
+
+    const result = await useCase.execute({
+      resumeText: parsedResumeText,
+      resumeFileName,
+      resumeFileType,
+      jobDescriptionText,
+      languagePreference,
+      generateCoverLetter,
+      applicationQuestions: applicationQuestions || undefined,
+    });
+
+    if (!result.success || !result.optimizedResume) {
+      return NextResponse.json(
+        { success: false, error: result.error ?? 'Resume generation failed' },
+        { status: 500 }
+      );
+    }
+
+    // ── Generate PDF ─────────────────────────────────────────────────────────
+    let pdfBase64: string | undefined;
+    try {
+      const pdfBytes = await generateResumePDF(result.optimizedResume);
+      pdfBase64 = pdfToBase64(pdfBytes);
+    } catch (pdfError) {
+      console.error('PDF generation error:', pdfError);
+      // Non-fatal — return data without PDF
+    }
+
+    return NextResponse.json({
+      success: true,
+      optimizedResume: result.optimizedResume,
+      pdfBase64,
+      coverLetter: result.coverLetter ?? null,
+      applicationAnswers: result.applicationAnswers ?? null,
+    });
+  } catch (error) {
+    console.error('API route error:', error);
+    const isOpenAIError =
+      error instanceof Error &&
+      (error.message.includes('OpenAI') ||
+        error.message.includes('API key') ||
+        error.message.includes('quota'));
+
+    return NextResponse.json(
+      {
+        success: false,
+        error: isOpenAIError
+          ? error.message
+          : 'An unexpected error occurred. Please try again.',
+      },
+      { status: 500 }
+    );
+  }
+}
