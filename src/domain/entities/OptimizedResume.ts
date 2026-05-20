@@ -8,6 +8,7 @@ import { SkillCategory } from '@/domain/entities/SkillCategory';
 import { Certification } from '@/domain/entities/Certification';
 import { Project } from '@/domain/entities/Project';
 import { Languages } from '@/domain/entities/Languages';
+import { isJsonObject, type JsonValue } from '@/domain/types/JsonValue';
 
 export interface OptimizedResume {
   // Core sections
@@ -35,8 +36,11 @@ export interface OptimizedResume {
   }[];
 }
 
-export function validateOptimizedResume(data: unknown): OptimizedResume {
-  const resume = data as OptimizedResume;
+export function validateOptimizedResume(data: JsonValue): OptimizedResume {
+  if (!isJsonObject(data)) {
+    throw new Error('Generated resume payload is not a valid object');
+  }
+  const resume = JSON.parse(JSON.stringify(data)) as OptimizedResume;
   if (!resume.personalInfo?.name) {
     throw new Error('Generated resume missing candidate name');
   }

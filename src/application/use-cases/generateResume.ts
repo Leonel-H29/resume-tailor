@@ -1,11 +1,13 @@
 // Application Use-Case: generateResume
 // Depends only on domain interfaces — never imports infrastructure.
 
-import type { IResumeOptimizationService, OptimizationOptions } from '@/domain/services/IResumeOptimizationService';
+import type { IResumeOptimizationService, OptimizationOptions, LanguageOptions } from '@/domain/services/IResumeOptimizationService';
 import type { OptimizedResume } from '@/domain/entities/OptimizedResume';
 import type { CoverLetter } from '@/domain/entities/CoverLetter';
 import type { ApplicationAnswers } from '@/domain/entities/ApplicationAnswers';
 import type { ApplicationEmail } from '@/domain/entities/ApplicationEmail';
+import type { DirectMessage } from '@/domain/entities/DirectMessage';
+import type { EmailTone } from '@/domain/entities/ApplicationEmail';
 import { createResume } from '@/domain/entities/Resume';
 import { createJobDescription } from '@/domain/entities/JobDescription';
 
@@ -16,13 +18,20 @@ export interface GenerateResumeInput {
   jobDescriptionText: string;
   jobTitle?: string;
   company?: string;
-  /** ISO-639-1 | "auto" | "en" (default) — applied to ALL outputs */
-  languagePreference?: string;
+
+  /** Per-output language map — each value is ISO-639-1 | "auto" | "en" */
+  languages?: LanguageOptions;
+
   generateCoverLetter?: boolean;
-  /** Newline-separated questions from the company application form */
   applicationQuestions?: string;
+
   generateApplicationEmail?: boolean;
   recipientName?: string;
+  emailAdditionalInfo?: string;
+  emailTone?: EmailTone;
+
+  generateDirectMessage?: boolean;
+  dmAdditionalInfo?: string;
 }
 
 export interface GenerateResumeOutput {
@@ -31,6 +40,7 @@ export interface GenerateResumeOutput {
   coverLetter?: CoverLetter;
   applicationAnswers?: ApplicationAnswers;
   applicationEmail?: ApplicationEmail;
+  directMessage?: DirectMessage;
   error?: string;
 }
 
@@ -43,13 +53,17 @@ export class GenerateResumeUseCase {
       const jobDescription = createJobDescription(input.jobDescriptionText, input.jobTitle, input.company);
 
       const options: OptimizationOptions = {
-        targetLanguage: input.languagePreference ?? 'en',
+        languages: input.languages ?? { resume: 'en' },
         preserveStructure: true,
         emphasizeKeywords: true,
         generateCoverLetter: input.generateCoverLetter ?? false,
         applicationQuestions: input.applicationQuestions?.trim() || undefined,
         generateApplicationEmail: input.generateApplicationEmail ?? false,
         recipientName: input.recipientName?.trim() || undefined,
+        emailAdditionalInfo: input.emailAdditionalInfo?.trim() || undefined,
+        emailTone: input.emailTone ?? 'professional',
+        generateDirectMessage: input.generateDirectMessage ?? false,
+        dmAdditionalInfo: input.dmAdditionalInfo?.trim() || undefined,
       };
 
       const bundle = await this.optimizationService.optimize(resume, jobDescription, options);
@@ -60,6 +74,7 @@ export class GenerateResumeUseCase {
         coverLetter: bundle.coverLetter,
         applicationAnswers: bundle.applicationAnswers,
         applicationEmail: bundle.applicationEmail,
+        directMessage: bundle.directMessage,
       };
     } catch (error) {
       return {

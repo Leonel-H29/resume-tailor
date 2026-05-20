@@ -17,8 +17,14 @@ export interface CoverLetter {
   language: string;
 }
 
-export function validateCoverLetter(data: unknown): CoverLetter {
-  const letter = data as CoverLetter;
+import type { JsonValue } from '@/domain/types/JsonValue';
+import { isJsonObject } from '@/domain/types/JsonValue';
+
+export function validateCoverLetter(data: JsonValue): CoverLetter {
+  if (!isJsonObject(data)) {
+    throw new Error('Generated cover letter payload is not a valid object');
+  }
+  const letter = JSON.parse(JSON.stringify(data)) as CoverLetter;
   if (!letter.opening?.trim())
     throw new Error('Generated cover letter is missing the opening paragraph');
   if (!letter.body || letter.body.length === 0)

@@ -5,21 +5,37 @@ import { GenerateResumeUseCase } from '@/application/use-cases/generateResume';
 import { OpenAIResumeAdapter } from '@/infrastructure/ai/openaiResumeAdapter';
 import { generateResumePDF, pdfToBase64 } from '@/infrastructure/pdf/pdfGenerator';
 import { parseResumeFile, validateFileSize, validateMimeType } from '@/infrastructure/parsers/resumeParser';
+import { validateApiSecret } from '@/lib/validateApiSecret';
+import type { LanguageOptions } from '@/domain/services/IResumeOptimizationService';
+import type { EmailTone } from '@/domain/entities/ApplicationEmail';
 
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
+  const authError = validateApiSecret(req);
+  if (authError) return authError;
+
   try {
     const formData = await req.formData();
 
-    const jobDescriptionText      = formData.get('jobDescription') as string;
-    const languagePreference      = (formData.get('language') as string) ?? 'en';
-    const resumeFile              = formData.get('resumeFile') as File | null;
-    const resumeText              = formData.get('resumeText') as string | null;
-    const generateCoverLetter     = (formData.get('generateCoverLetter') as string) === 'true';
-    const applicationQuestions    = (formData.get('applicationQuestions') as string | null) ?? '';
-    const generateApplicationEmail = (formData.get('generateApplicationEmail') as string) === 'true';
-    const recipientName           = (formData.get('recipientName') as string | null) ?? '';
+    const jobDescriptionText        = formData.get('jobDescription') as string;
+    const resumeFile                = formData.get('resumeFile') as File | null;
+    const resumeText                = formData.get('resumeText') as string | null;
+    const generateCoverLetter       = formData.get('generateCoverLetter') === 'true';
+    const applicationQuestions      = (formData.get('applicationQuestions') as string) ?? '';
+    const generateApplicationEmail  = formData.get('generateApplicationEmail') === 'true';
+    const recipientName             = (formData.get('recipientName') as string) ?? '';
+    const emailAdditionalInfo       = (formData.get('emailAdditionalInfo') as string) ?? '';
+    const emailTone                 = ((formData.get('emailTone') as string) ?? 'professional') as EmailTone;
+    const generateDirectMessage     = formData.get('generateDirectMessage') === 'true';
+    const dmAdditionalInfo          = (formData.get('dmAdditionalInfo') as string) ?? '';
+
+    // Per-output languages — sent as a JSON string
+    let languages: LanguageOptions = { resume: 'en' };
+    try {
+      const raw = formData.get('languages') as string | null;
+      if (raw) languages = JSON.parse(raw);
+    } catch { /* keep default */ }
 
     if (!jobDescriptionText?.trim())
       return NextResponse.json({ success: false, error: 'Job description is required' }, { status: 400 });
@@ -60,11 +76,15 @@ export async function POST(req: NextRequest) {
       resumeFileName,
       resumeFileType,
       jobDescriptionText,
-      languagePreference,
+      languages,
       generateCoverLetter,
       applicationQuestions: applicationQuestions || undefined,
       generateApplicationEmail,
       recipientName: recipientName || undefined,
+      emailAdditionalInfo: emailAdditionalInfo || undefined,
+      emailTone,
+      generateDirectMessage,
+      dmAdditionalInfo: dmAdditionalInfo || undefined,
     });
 
     if (!result.success || !result.optimizedResume)
@@ -79,18 +99,18 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      optimizedResume:       result.optimizedResume,
+      optimizedResume:    result.optimizedResume,
       pdfBase64,
-      coverLetter:           result.coverLetter           ?? null,
-      applicationAnswers:    result.applicationAnswers    ?? null,
-      applicationEmail:      result.applicationEmail      ?? null,
+      coverLetter:        result.coverLetter        ?? null,
+      applicationAnswers: result.applicationAnswers ?? null,
+      applicationEmail:   result.applicationEmail   ?? null,
+      directMessage:      result.directMessage      ?? null,
     });
 
   } catch (error) {
     console.error('API route error:', error);
-    const isOpenAIError = error instanceof Error && (
-      error.message.includes('OpenAI') || error.message.includes('API key') || error.message.includes('quota')
-    );
+    const isOpenAIError = error instanceof Error &&
+      (error.message.includes('OpenAI') || error.message.includes('API key') || error.message.includes('quota'));
     return NextResponse.json(
       { success: false, error: isOpenAIError ? error.message : 'An unexpected error occurred. Please try again.' },
       { status: 500 }

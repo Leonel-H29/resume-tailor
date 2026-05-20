@@ -14,8 +14,14 @@ export interface ApplicationAnswers {
   language: string;
 }
 
-export function validateApplicationAnswers(data: unknown): ApplicationAnswers {
-  const result = data as ApplicationAnswers;
+import type { JsonValue } from '@/domain/types/JsonValue';
+import { isJsonObject } from '@/domain/types/JsonValue';
+
+export function validateApplicationAnswers(data: JsonValue): ApplicationAnswers {
+  if (!isJsonObject(data)) {
+    throw new Error('Generated application answers payload is not a valid object');
+  }
+  const result = JSON.parse(JSON.stringify(data)) as ApplicationAnswers;
   if (!result.answers || result.answers.length === 0)
     throw new Error('Generated application answers are empty');
   for (const item of result.answers) {
