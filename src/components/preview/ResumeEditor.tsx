@@ -1,9 +1,42 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { Save, Loader2, Plus, Trash2, ChevronDown, ChevronUp } from "lucide-react";
+import { useState } from "react";
+import { Save, Loader2, Trash2 } from "lucide-react";
 import type { OptimizedResume } from "@/domain/entities/OptimizedResume";
+import type { PersonalInfo } from "@/domain/entities/PersonalInfo";
 import type { WorkExperience } from "@/domain/entities/WorkExperience";
+import type { Education } from "@/domain/entities/Education";
+import type { SkillCategory } from "@/domain/entities/SkillCategory";
+import type { Certification } from "@/domain/entities/Certification";
+import type { Project } from "@/domain/entities/Project";
+import type { Languages } from "@/domain/entities/Languages";
+import {
+  OPTIONAL_SECTIONS,
+  SECTION_DISPLAY_NAMES,
+  type OptionalSectionKey,
+} from "@/domain/entities/resumeSections";
+import {
+  createEmptyCertification,
+  createEmptyEducation,
+  createEmptyLanguage,
+  createEmptyProject,
+  createEmptySkillCategory,
+  createEmptyWorkExperience,
+} from "@/components/preview/editor/editorDefaults";
+import {
+  addArrayItem,
+  moveArrayItem,
+  removeArrayAt,
+  updateArrayAt,
+} from "@/components/preview/editor/arrayHelpers";
+import {
+  AddItemButton,
+  EditorField,
+  ItemToolbar,
+  SectionHeader,
+} from "@/components/preview/editor/EditorPrimitives";
+import { ProficiencySelect } from "@/components/preview/editor/ProficiencySelect";
+import { SkillsCommaInput } from "@/components/preview/editor/SkillsCommaInput";
 import { apiPostJson } from "@/lib/apiClient";
 
 interface ResumeEditorProps {
@@ -11,124 +44,252 @@ interface ResumeEditorProps {
   onSave: (updated: OptimizedResume, newPdfBase64: string) => void;
 }
 
-// ── Tiny reusable field components ───────────────────────────────────────────
-
-function Field({ label, value, onChange, multiline = false, rows = 2 }: {
-  label: string; value: string; onChange: (v: string) => void;
-  multiline?: boolean; rows?: number;
-}) {
-  const base = "w-full bg-muted/40 border border-border/50 rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-accent/50 focus:border-accent/50 px-3 py-2 transition-colors";
-  return (
-    <div>
-      <label className="block text-xs text-muted-foreground mb-1">{label}</label>
-      {multiline
-        ? <textarea value={value} onChange={e => onChange(e.target.value)} rows={rows} className={`${base} resize-y min-h-[2.5rem]`} />
-        : <input type="text" value={value} onChange={e => onChange(e.target.value)} className={base} />
-      }
-    </div>
-  );
-}
-
-/**
- * Comma-separated skills input: keeps a local raw string so partial tokens (e.g. trailing ", Java")
- * are not stripped by re-joining on every keystroke — the root cause of "can't type after PDF save".
- */
-function SkillsCommaInput({
-  skills,
-  onSkillsChange,
-}: {
-  skills: string[];
-  onSkillsChange: (skills: string[]) => void;
-}) {
-  const skillsKey = skills.join("\u0001");
-  const [text, setText] = useState(() => skills.join(", "));
-  const isInternalChange = useRef(false);
-
-  useEffect(() => {
-    if (isInternalChange.current) {
-      isInternalChange.current = false;
-      return;
-    }
-    setText(skills.join(", "));
-  }, [skillsKey, skills]);
-
-  const handleChange = (raw: string) => {
-    isInternalChange.current = true;
-    setText(raw);
-    onSkillsChange(
-      raw.split(",").map(s => s.trim()).filter(Boolean)
-    );
+function normalizeDraft(resume: OptimizedResume): OptimizedResume {
+  const cloned = structuredClone(resume);
+  return {
+    ...cloned,
+    languages: cloned.languages ?? [],
   };
-
-  return (
-    <Field
-      label="Skills (comma-separated)"
-      value={text}
-      onChange={handleChange}
-    />
-  );
 }
 
-function SectionHeader({ title, open, onToggle }: { title: string; open: boolean; onToggle: () => void }) {
-  return (
-    <button type="button" onClick={onToggle}
-      className="w-full flex items-center justify-between py-2 text-xs font-semibold text-accent uppercase tracking-widest border-b border-accent/30 mb-3">
-      {title}
-      {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-    </button>
-  );
+function isOptionalSectionActive(
+  draft: OptimizedResume,
+  section: OptionalSectionKey
+): boolean {
+  if (section === "certifications") {
+    return draft.certifications !== undefined;
+  }
+  return draft.projects !== undefined;
 }
-
-// ── Main component ────────────────────────────────────────────────────────────
 
 export function ResumeEditor({ resume, onSave }: ResumeEditorProps) {
-  const [draft, setDraft] = useState<OptimizedResume>(() => structuredClone(resume));
+  const [draft, setDraft] = useState<OptimizedResume>(() => normalizeDraft(resume));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [open, setOpen] = useState<Record<string, boolean>>({
-    personal: true, summary: true, experience: true,
-    education: false, skills: false, certs: false,
+    personal: true,
+    summary: true,
+    experience: true,
+    education: false,
+    skills: false,
+    languages: false,
+    certs: false,
+    projects: false,
   });
 
-  const toggle = (key: string) => setOpen(p => ({ ...p, [key]: !p[key] }));
+  const toggle = (key: string) => setOpen((previous) => ({ ...previous, [key]: !previous[key] }));
 
-  const setPersonal = (key: string) => (val: string) =>
-    setDraft(p => ({ ...p, personalInfo: { ...p.personalInfo, [key]: val } }));
+  const setPersonal = (key: keyof PersonalInfo) => (value: string) =>
+    setDraft((previous) => ({
+      ...previous,
+      personalInfo: { ...previous.personalInfo, [key]: value },
+    }));
 
-  const setExp = (i: number, key: keyof WorkExperience) => (val: string | string[]) =>
-    setDraft(p => {
-      const exp = [...p.experience];
-      exp[i] = { ...exp[i], [key]: val };
-      return { ...p, experience: exp };
-    });
+  const updateExperience = (index: number, updater: (job: WorkExperience) => WorkExperience) =>
+    setDraft((previous) => ({
+      ...previous,
+      experience: updateArrayAt(previous.experience, index, updater),
+    }));
 
-  const setExpAchievement = (expIdx: number, achIdx: number, val: string) =>
-    setDraft(p => {
-      const exp = [...p.experience];
-      const achievements = [...exp[expIdx].achievements];
-      achievements[achIdx] = val;
-      exp[expIdx] = { ...exp[expIdx], achievements };
-      return { ...p, experience: exp };
-    });
+  const setExperienceField =
+    (index: number, key: keyof WorkExperience) => (value: string | string[]) =>
+      updateExperience(index, (job) => ({ ...job, [key]: value }));
 
-  const addAchievement = (expIdx: number) =>
-    setDraft(p => {
-      const exp = [...p.experience];
-      exp[expIdx] = { ...exp[expIdx], achievements: [...exp[expIdx].achievements, ""] };
-      return { ...p, experience: exp };
-    });
+  const setExperienceAchievement = (expIndex: number, achIndex: number, value: string) =>
+    updateExperience(expIndex, (job) => ({
+      ...job,
+      achievements: updateArrayAt(job.achievements, achIndex, () => value),
+    }));
 
-  const removeAchievement = (expIdx: number, achIdx: number) =>
-    setDraft(p => {
-      const exp = [...p.experience];
-      const achievements = exp[expIdx].achievements.filter((_, i) => i !== achIdx);
-      exp[expIdx] = { ...exp[expIdx], achievements };
-      return { ...p, experience: exp };
-    });
+  const addExperience = () =>
+    setDraft((previous) => ({
+      ...previous,
+      experience: addArrayItem(previous.experience, createEmptyWorkExperience()),
+    }));
+
+  const removeExperience = (index: number) =>
+    setDraft((previous) => ({
+      ...previous,
+      experience: removeArrayAt(previous.experience, index),
+    }));
+
+  const moveExperience = (from: number, to: number) =>
+    setDraft((previous) => ({
+      ...previous,
+      experience: moveArrayItem(previous.experience, from, to),
+    }));
+
+  const addAchievement = (expIndex: number) =>
+    updateExperience(expIndex, (job) => ({
+      ...job,
+      achievements: addArrayItem(job.achievements, ""),
+    }));
+
+  const removeAchievement = (expIndex: number, achIndex: number) =>
+    updateExperience(expIndex, (job) => ({
+      ...job,
+      achievements: removeArrayAt(job.achievements, achIndex),
+    }));
+
+  const updateEducation = (index: number, updater: (entry: Education) => Education) =>
+    setDraft((previous) => ({
+      ...previous,
+      education: updateArrayAt(previous.education, index, updater),
+    }));
+
+  const setEducationField = (index: number, key: keyof Education) => (value: string) =>
+    updateEducation(index, (entry) => ({ ...entry, [key]: value }));
+
+  const addEducation = () =>
+    setDraft((previous) => ({
+      ...previous,
+      education: addArrayItem(previous.education, createEmptyEducation()),
+    }));
+
+  const removeEducation = (index: number) =>
+    setDraft((previous) => ({
+      ...previous,
+      education: removeArrayAt(previous.education, index),
+    }));
+
+  const moveEducation = (from: number, to: number) =>
+    setDraft((previous) => ({
+      ...previous,
+      education: moveArrayItem(previous.education, from, to),
+    }));
+
+  const updateSkillCategory = (index: number, updater: (category: SkillCategory) => SkillCategory) =>
+    setDraft((previous) => ({
+      ...previous,
+      skills: updateArrayAt(previous.skills, index, updater),
+    }));
+
+  const addSkillCategory = () =>
+    setDraft((previous) => ({
+      ...previous,
+      skills: addArrayItem(previous.skills, createEmptySkillCategory()),
+    }));
+
+  const removeSkillCategory = (index: number) =>
+    setDraft((previous) => ({
+      ...previous,
+      skills: removeArrayAt(previous.skills, index),
+    }));
+
+  const moveSkillCategory = (from: number, to: number) =>
+    setDraft((previous) => ({
+      ...previous,
+      skills: moveArrayItem(previous.skills, from, to),
+    }));
+
+  const updateLanguage = (index: number, updater: (entry: Languages) => Languages) =>
+    setDraft((previous) => ({
+      ...previous,
+      languages: updateArrayAt(previous.languages ?? [], index, updater),
+    }));
+
+  const addLanguage = () =>
+    setDraft((previous) => ({
+      ...previous,
+      languages: addArrayItem(previous.languages ?? [], createEmptyLanguage()),
+    }));
+
+  const removeLanguage = (index: number) =>
+    setDraft((previous) => ({
+      ...previous,
+      languages: removeArrayAt(previous.languages ?? [], index),
+    }));
+
+  const moveLanguage = (from: number, to: number) =>
+    setDraft((previous) => ({
+      ...previous,
+      languages: moveArrayItem(previous.languages ?? [], from, to),
+    }));
+
+  const updateCertification = (index: number, updater: (entry: Certification) => Certification) =>
+    setDraft((previous) => ({
+      ...previous,
+      certifications: updateArrayAt(previous.certifications ?? [], index, updater),
+    }));
+
+  const addCertification = () =>
+    setDraft((previous) => ({
+      ...previous,
+      certifications: addArrayItem(previous.certifications ?? [], createEmptyCertification()),
+    }));
+
+  const removeCertification = (index: number) =>
+    setDraft((previous) => ({
+      ...previous,
+      certifications: removeArrayAt(previous.certifications ?? [], index),
+    }));
+
+  const moveCertification = (from: number, to: number) =>
+    setDraft((previous) => ({
+      ...previous,
+      certifications: moveArrayItem(previous.certifications ?? [], from, to),
+    }));
+
+  const updateProject = (index: number, updater: (entry: Project) => Project) =>
+    setDraft((previous) => ({
+      ...previous,
+      projects: updateArrayAt(previous.projects ?? [], index, updater),
+    }));
+
+  const addProject = () =>
+    setDraft((previous) => ({
+      ...previous,
+      projects: addArrayItem(previous.projects ?? [], createEmptyProject()),
+    }));
+
+  const removeProject = (index: number) =>
+    setDraft((previous) => ({
+      ...previous,
+      projects: removeArrayAt(previous.projects ?? [], index),
+    }));
+
+  const moveProject = (from: number, to: number) =>
+    setDraft((previous) => ({
+      ...previous,
+      projects: moveArrayItem(previous.projects ?? [], from, to),
+    }));
+
+  const addOptionalSection = (section: OptionalSectionKey) => {
+    setOpen((previous) => ({
+      ...previous,
+      [section === "certifications" ? "certs" : "projects"]: true,
+    }));
+
+    if (section === "certifications") {
+      setDraft((previous) => ({
+        ...previous,
+        certifications: previous.certifications ?? [createEmptyCertification()],
+      }));
+      return;
+    }
+
+    setDraft((previous) => ({
+      ...previous,
+      projects: previous.projects ?? [createEmptyProject()],
+    }));
+  };
+
+  const removeOptionalSection = (section: OptionalSectionKey) => {
+    const accordionKey = section === "certifications" ? "certs" : "projects";
+    setOpen((previous) => ({ ...previous, [accordionKey]: false }));
+
+    if (section === "certifications") {
+      setDraft((previous) => ({ ...previous, certifications: undefined }));
+      return;
+    }
+
+    setDraft((previous) => ({ ...previous, projects: undefined }));
+  };
 
   const handleSave = async () => {
     setSaving(true);
     setError("");
+
     try {
       const data = await apiPostJson<{ success: boolean; pdfBase64: string }>("/api/pdf", draft);
       onSave(draft, data.pdfBase64);
@@ -139,144 +300,519 @@ export function ResumeEditor({ resume, onSave }: ResumeEditorProps) {
     }
   };
 
-  const pi = draft.personalInfo;
+  const inactiveOptionalSections = OPTIONAL_SECTIONS.filter(
+    (section) => !isOptionalSectionActive(draft, section)
+  );
+
+  const personalInfo = draft.personalInfo;
+  const languages = draft.languages ?? [];
 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
-        <p className="text-xs text-muted-foreground">Edit any field, then save to regenerate the PDF.</p>
-        <button type="button" onClick={handleSave} disabled={saving}
-          className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-accent text-accent-foreground hover:bg-accent/90 disabled:opacity-50 transition-all glow-accent">
-          {saving ? <><Loader2 size={14} className="animate-spin" /> Saving…</> : <><Save size={14} /> Apply & Regenerate</>}
+        <p className="text-xs text-muted-foreground">
+          Edit any field, then save to regenerate the PDF.
+        </p>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-accent text-accent-foreground hover:bg-accent/90 disabled:opacity-50 transition-all glow-accent"
+        >
+          {saving ? (
+            <>
+              <Loader2 size={14} className="animate-spin" /> Saving…
+            </>
+          ) : (
+            <>
+              <Save size={14} /> Apply & Regenerate
+            </>
+          )}
         </button>
       </div>
       {error && <p className="text-xs text-destructive">{error}</p>}
 
       <div className="glass-card p-5 overflow-y-auto max-h-[65vh] space-y-5">
-
         <div>
-          <SectionHeader title="Personal Info" open={!!open.personal} onToggle={() => toggle("personal")} />
+          <SectionHeader
+            title="Personal Info"
+            open={!!open.personal}
+            onToggle={() => toggle("personal")}
+          />
           {open.personal && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Field label="Full Name"  value={pi.name     ?? ""} onChange={setPersonal("name")} />
-              <Field label="Email"      value={pi.email    ?? ""} onChange={setPersonal("email")} />
-              <Field label="Phone"      value={pi.phone    ?? ""} onChange={setPersonal("phone")} />
-              <Field label="Location"   value={pi.location ?? ""} onChange={setPersonal("location")} />
-              <Field label="LinkedIn"   value={pi.linkedin ?? ""} onChange={setPersonal("linkedin")} />
-              <Field label="GitHub"     value={pi.github   ?? ""} onChange={setPersonal("github")} />
-              <Field label="Website"    value={pi.website  ?? ""} onChange={setPersonal("website")} />
+              <EditorField
+                label="Full Name"
+                value={personalInfo.name ?? ""}
+                onChange={setPersonal("name")}
+              />
+              <EditorField
+                label="Email"
+                value={personalInfo.email ?? ""}
+                onChange={setPersonal("email")}
+              />
+              <EditorField
+                label="Phone"
+                value={personalInfo.phone ?? ""}
+                onChange={setPersonal("phone")}
+              />
+              <EditorField
+                label="Location"
+                value={personalInfo.location ?? ""}
+                onChange={setPersonal("location")}
+              />
+              <EditorField
+                label="LinkedIn"
+                value={personalInfo.linkedin ?? ""}
+                onChange={setPersonal("linkedin")}
+              />
+              <EditorField
+                label="GitHub"
+                value={personalInfo.github ?? ""}
+                onChange={setPersonal("github")}
+              />
+              <EditorField
+                label="Website"
+                value={personalInfo.website ?? ""}
+                onChange={setPersonal("website")}
+              />
             </div>
           )}
         </div>
 
         <div>
-          <SectionHeader title="Professional Summary" open={!!open.summary} onToggle={() => toggle("summary")} />
+          <SectionHeader
+            title={SECTION_DISPLAY_NAMES.summary}
+            open={!!open.summary}
+            onToggle={() => toggle("summary")}
+          />
           {open.summary && (
-            <Field label="Summary" value={draft.summary} multiline rows={4}
-              onChange={v => setDraft(p => ({ ...p, summary: v }))} />
+            <EditorField
+              label="Summary"
+              value={draft.summary}
+              multiline
+              rows={4}
+              onChange={(value) => setDraft((previous) => ({ ...previous, summary: value }))}
+            />
           )}
         </div>
 
         <div>
-          <SectionHeader title="Experience" open={!!open.experience} onToggle={() => toggle("experience")} />
+          <SectionHeader
+            title={SECTION_DISPLAY_NAMES.experience}
+            open={!!open.experience}
+            onToggle={() => toggle("experience")}
+          />
           {open.experience && (
             <div className="space-y-5">
-              {draft.experience.map((job, i) => (
-                <div key={i} className="p-4 rounded-xl bg-muted/20 border border-border/40 space-y-3">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <Field label="Job Title"  value={job.title}      onChange={v => setExp(i, "title")(v)} />
-                    <Field label="Company"    value={job.company}    onChange={v => setExp(i, "company")(v)} />
-                    <Field label="Location"   value={job.location ?? ""} onChange={v => setExp(i, "location")(v)} />
-                    <Field label="Start Date" value={job.startDate}  onChange={v => setExp(i, "startDate")(v)} />
-                    <Field label="End Date"   value={job.endDate}    onChange={v => setExp(i, "endDate")(v)} />
+              {draft.experience.map((job, index) => (
+                <div
+                  key={`experience-${index}`}
+                  className="p-4 rounded-xl bg-muted/20 border border-border/40 space-y-3"
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-medium text-muted-foreground">
+                      Position {index + 1}
+                    </p>
+                    <ItemToolbar
+                      onRemove={() => removeExperience(index)}
+                      onMoveUp={() => moveExperience(index, index - 1)}
+                      onMoveDown={() => moveExperience(index, index + 1)}
+                      canRemove={draft.experience.length > 1}
+                      canMoveUp={index > 0}
+                      canMoveDown={index < draft.experience.length - 1}
+                      removeLabel="Remove job"
+                    />
                   </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <EditorField
+                      label="Job Title"
+                      value={job.title}
+                      onChange={setExperienceField(index, "title")}
+                    />
+                    <EditorField
+                      label="Company"
+                      value={job.company}
+                      onChange={setExperienceField(index, "company")}
+                    />
+                    <EditorField
+                      label="Location"
+                      value={job.location ?? ""}
+                      onChange={setExperienceField(index, "location")}
+                    />
+                    <EditorField
+                      label="Start Date"
+                      value={job.startDate}
+                      onChange={setExperienceField(index, "startDate")}
+                    />
+                    <EditorField
+                      label="End Date"
+                      value={job.endDate}
+                      onChange={setExperienceField(index, "endDate")}
+                    />
+                  </div>
+                  <SkillsCommaInput
+                    skills={job.skills}
+                    onSkillsChange={(skills) => setExperienceField(index, "skills")(skills)}
+                  />
                   <div>
-                    <label className="block text-xs text-muted-foreground mb-2">Achievements</label>
+                    <label className="block text-xs text-muted-foreground mb-2">
+                      Achievements
+                    </label>
                     <div className="space-y-2">
-                      {job.achievements.map((ach, j) => (
-                        <div key={j} className="flex gap-2 items-start">
+                      {job.achievements.map((achievement, achIndex) => (
+                        <div key={`achievement-${index}-${achIndex}`} className="flex gap-2 items-start">
                           <span className="text-accent mt-2 text-xs flex-shrink-0">•</span>
-                          <textarea value={ach} onChange={e => setExpAchievement(i, j, e.target.value)} rows={2}
-                            className="flex-1 bg-muted/40 border border-border/50 rounded-lg text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-accent/50 px-3 py-2 resize-y min-h-[2.5rem] transition-colors" />
-                          <button type="button" onClick={() => removeAchievement(i, j)}
-                            className="mt-2 p-1 text-muted-foreground hover:text-destructive transition-colors">
+                          <textarea
+                            value={achievement}
+                            onChange={(event) =>
+                              setExperienceAchievement(index, achIndex, event.target.value)
+                            }
+                            rows={2}
+                            className="flex-1 bg-muted/40 border border-border/50 rounded-lg text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-accent/50 px-3 py-2 resize-y min-h-[2.5rem] transition-colors"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeAchievement(index, achIndex)}
+                            className="mt-2 p-1 text-muted-foreground hover:text-destructive transition-colors"
+                          >
                             <Trash2 size={13} />
                           </button>
                         </div>
                       ))}
-                      <button type="button" onClick={() => addAchievement(i)}
-                        className="flex items-center gap-1.5 text-xs text-accent hover:text-accent/80 transition-colors mt-1">
-                        <Plus size={12} /> Add achievement
-                      </button>
+                      <AddItemButton
+                        label="Add achievement"
+                        onClick={() => addAchievement(index)}
+                      />
                     </div>
                   </div>
                 </div>
               ))}
+              <AddItemButton label="Add job" onClick={addExperience} />
             </div>
           )}
         </div>
 
         <div>
-          <SectionHeader title="Education" open={!!open.education} onToggle={() => toggle("education")} />
+          <SectionHeader
+            title={SECTION_DISPLAY_NAMES.education}
+            open={!!open.education}
+            onToggle={() => toggle("education")}
+          />
           {open.education && (
             <div className="space-y-4">
-              {draft.education.map((edu, i) => (
-                <div key={i} className="p-4 rounded-xl bg-muted/20 border border-border/40">
+              {draft.education.map((education, index) => (
+                <div
+                  key={`education-${index}`}
+                  className="p-4 rounded-xl bg-muted/20 border border-border/40 space-y-3"
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-medium text-muted-foreground">
+                      Education {index + 1}
+                    </p>
+                    <ItemToolbar
+                      onRemove={() => removeEducation(index)}
+                      onMoveUp={() => moveEducation(index, index - 1)}
+                      onMoveDown={() => moveEducation(index, index + 1)}
+                      canMoveUp={index > 0}
+                      canMoveDown={index < draft.education.length - 1}
+                      removeLabel="Remove education"
+                    />
+                  </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <Field label="Institution"  value={edu.institution}       onChange={v => setDraft(p => { const e = [...p.education]; e[i] = { ...e[i], institution: v }; return { ...p, education: e }; })} />
-                    <Field label="Degree"       value={edu.degree}            onChange={v => setDraft(p => { const e = [...p.education]; e[i] = { ...e[i], degree: v };      return { ...p, education: e }; })} />
-                    <Field label="Field"        value={edu.field        ?? ""} onChange={v => setDraft(p => { const e = [...p.education]; e[i] = { ...e[i], field: v };       return { ...p, education: e }; })} />
-                    <Field label="Grad. Date"   value={edu.graduationDate}    onChange={v => setDraft(p => { const e = [...p.education]; e[i] = { ...e[i], graduationDate: v }; return { ...p, education: e }; })} />
-                    <Field label="GPA"          value={edu.gpa          ?? ""} onChange={v => setDraft(p => { const e = [...p.education]; e[i] = { ...e[i], gpa: v };         return { ...p, education: e }; })} />
-                    <Field label="Honors"       value={edu.honors       ?? ""} onChange={v => setDraft(p => { const e = [...p.education]; e[i] = { ...e[i], honors: v };      return { ...p, education: e }; })} />
+                    <EditorField
+                      label="Institution"
+                      value={education.institution}
+                      onChange={setEducationField(index, "institution")}
+                    />
+                    <EditorField
+                      label="Degree"
+                      value={education.degree}
+                      onChange={setEducationField(index, "degree")}
+                    />
+                    <EditorField
+                      label="Field"
+                      value={education.field ?? ""}
+                      onChange={setEducationField(index, "field")}
+                    />
+                    <EditorField
+                      label="Location"
+                      value={education.location ?? ""}
+                      onChange={setEducationField(index, "location")}
+                    />
+                    <EditorField
+                      label="Start Date"
+                      value={education.startDate}
+                      onChange={setEducationField(index, "startDate")}
+                    />
+                    <EditorField
+                      label="Grad. Date"
+                      value={education.graduationDate}
+                      onChange={setEducationField(index, "graduationDate")}
+                    />
+                    <EditorField
+                      label="GPA"
+                      value={education.gpa ?? ""}
+                      onChange={setEducationField(index, "gpa")}
+                    />
+                    <EditorField
+                      label="Honors"
+                      value={education.honors ?? ""}
+                      onChange={setEducationField(index, "honors")}
+                    />
                   </div>
                 </div>
               ))}
+              <AddItemButton label="Add education" onClick={addEducation} />
             </div>
           )}
         </div>
 
         <div>
-          <SectionHeader title="Skills" open={!!open.skills} onToggle={() => toggle("skills")} />
+          <SectionHeader
+            title={SECTION_DISPLAY_NAMES.skills}
+            open={!!open.skills}
+            onToggle={() => toggle("skills")}
+          />
           {open.skills && (
             <div className="space-y-3">
-              {draft.skills.map((cat, i) => (
-                <div key={i} className="p-3 rounded-lg bg-muted/20 border border-border/40 space-y-2">
-                  <Field label="Category" value={cat.name}
-                    onChange={v => setDraft(p => { const s = [...p.skills]; s[i] = { ...s[i], name: v }; return { ...p, skills: s }; })} />
+              {draft.skills.map((category, index) => (
+                <div
+                  key={`skills-${index}`}
+                  className="p-3 rounded-lg bg-muted/20 border border-border/40 space-y-2"
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-medium text-muted-foreground">
+                      Category {index + 1}
+                    </p>
+                    <ItemToolbar
+                      onRemove={() => removeSkillCategory(index)}
+                      onMoveUp={() => moveSkillCategory(index, index - 1)}
+                      onMoveDown={() => moveSkillCategory(index, index + 1)}
+                      canMoveUp={index > 0}
+                      canMoveDown={index < draft.skills.length - 1}
+                      removeLabel="Remove category"
+                    />
+                  </div>
+                  <EditorField
+                    label="Category"
+                    value={category.name}
+                    onChange={(value) =>
+                      updateSkillCategory(index, (entry) => ({ ...entry, name: value }))
+                    }
+                  />
                   <SkillsCommaInput
-                    skills={cat.skills}
-                    onSkillsChange={skills => setDraft(p => {
-                      const s = [...p.skills];
-                      s[i] = { ...s[i], skills };
-                      return { ...p, skills: s };
-                    })}
+                    skills={category.skills}
+                    onSkillsChange={(skills) =>
+                      updateSkillCategory(index, (entry) => ({ ...entry, skills }))
+                    }
                   />
                 </div>
               ))}
+              <AddItemButton label="Add skill category" onClick={addSkillCategory} />
             </div>
           )}
         </div>
 
-        {draft.certifications && draft.certifications.length > 0 && (
+        <div>
+          <SectionHeader
+            title={SECTION_DISPLAY_NAMES.languages}
+            open={!!open.languages}
+            onToggle={() => toggle("languages")}
+          />
+          {open.languages && (
+            <div className="space-y-3">
+              {languages.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  No languages yet. Add one below.
+                </p>
+              )}
+              {languages.map((language, index) => (
+                <div
+                  key={`language-${index}`}
+                  className="p-3 rounded-lg bg-muted/20 border border-border/40 space-y-2"
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-medium text-muted-foreground">
+                      Language {index + 1}
+                    </p>
+                    <ItemToolbar
+                      onRemove={() => removeLanguage(index)}
+                      onMoveUp={() => moveLanguage(index, index - 1)}
+                      onMoveDown={() => moveLanguage(index, index + 1)}
+                      canMoveUp={index > 0}
+                      canMoveDown={index < languages.length - 1}
+                      removeLabel="Remove language"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <EditorField
+                      label="Language"
+                      value={language.language}
+                      onChange={(value) =>
+                        updateLanguage(index, (entry) => ({ ...entry, language: value }))
+                      }
+                    />
+                    <ProficiencySelect
+                      label="Proficiency Level"
+                      value={language.level}
+                      onChange={(value) =>
+                        updateLanguage(index, (entry) => ({ ...entry, level: value }))
+                      }
+                    />
+                  </div>
+                </div>
+              ))}
+              <AddItemButton label="Add language" onClick={addLanguage} />
+            </div>
+          )}
+        </div>
+
+        {isOptionalSectionActive(draft, "certifications") && (
           <div>
-            <SectionHeader title="Certifications" open={!!open.certs} onToggle={() => toggle("certs")} />
+            <SectionHeader
+              title={SECTION_DISPLAY_NAMES.certifications}
+              open={!!open.certs}
+              onToggle={() => toggle("certs")}
+              canRemoveSection
+              onRemoveSection={() => removeOptionalSection("certifications")}
+            />
             {open.certs && (
               <div className="space-y-3">
-                {draft.certifications.map((cert, i) => (
-                  <div key={i} className="p-3 rounded-lg bg-muted/20 border border-border/40">
+                {(draft.certifications ?? []).map((certification, index) => (
+                  <div
+                    key={`certification-${index}`}
+                    className="p-3 rounded-lg bg-muted/20 border border-border/40 space-y-2"
+                  >
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-medium text-muted-foreground">
+                        Certification {index + 1}
+                      </p>
+                      <ItemToolbar
+                        onRemove={() => removeCertification(index)}
+                        onMoveUp={() => moveCertification(index, index - 1)}
+                        onMoveDown={() => moveCertification(index, index + 1)}
+                        canMoveUp={index > 0}
+                        canMoveDown={index < (draft.certifications ?? []).length - 1}
+                        removeLabel="Remove certification"
+                      />
+                    </div>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <Field label="Name"   value={cert.name}         onChange={v => setDraft(p => { const c = [...(p.certifications ?? [])]; c[i] = { ...c[i], name: v };   return { ...p, certifications: c }; })} />
-                      <Field label="Issuer" value={cert.issuer ?? ""} onChange={v => setDraft(p => { const c = [...(p.certifications ?? [])]; c[i] = { ...c[i], issuer: v }; return { ...p, certifications: c }; })} />
-                      <Field label="Date"   value={cert.date   ?? ""} onChange={v => setDraft(p => { const c = [...(p.certifications ?? [])]; c[i] = { ...c[i], date: v };   return { ...p, certifications: c }; })} />
+                      <EditorField
+                        label="Name"
+                        value={certification.name}
+                        onChange={(value) =>
+                          updateCertification(index, (entry) => ({ ...entry, name: value }))
+                        }
+                      />
+                      <EditorField
+                        label="Issuer"
+                        value={certification.issuer ?? ""}
+                        onChange={(value) =>
+                          updateCertification(index, (entry) => ({ ...entry, issuer: value }))
+                        }
+                      />
+                      <EditorField
+                        label="Date"
+                        value={certification.date ?? ""}
+                        onChange={(value) =>
+                          updateCertification(index, (entry) => ({ ...entry, date: value }))
+                        }
+                      />
                     </div>
                   </div>
                 ))}
+                <AddItemButton label="Add certification" onClick={addCertification} />
               </div>
             )}
           </div>
         )}
 
+        {isOptionalSectionActive(draft, "projects") && (
+          <div>
+            <SectionHeader
+              title={SECTION_DISPLAY_NAMES.projects}
+              open={!!open.projects}
+              onToggle={() => toggle("projects")}
+              canRemoveSection
+              onRemoveSection={() => removeOptionalSection("projects")}
+            />
+            {open.projects && (
+              <div className="space-y-3">
+                {(draft.projects ?? []).map((project, index) => (
+                  <div
+                    key={`project-${index}`}
+                    className="p-3 rounded-lg bg-muted/20 border border-border/40 space-y-2"
+                  >
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-medium text-muted-foreground">
+                        Project {index + 1}
+                      </p>
+                      <ItemToolbar
+                        onRemove={() => removeProject(index)}
+                        onMoveUp={() => moveProject(index, index - 1)}
+                        onMoveDown={() => moveProject(index, index + 1)}
+                        canMoveUp={index > 0}
+                        canMoveDown={index < (draft.projects ?? []).length - 1}
+                        removeLabel="Remove project"
+                      />
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <EditorField
+                        label="Name"
+                        value={project.name}
+                        onChange={(value) =>
+                          updateProject(index, (entry) => ({ ...entry, name: value }))
+                        }
+                      />
+                      <EditorField
+                        label="URL"
+                        value={project.url ?? ""}
+                        onChange={(value) =>
+                          updateProject(index, (entry) => ({ ...entry, url: value }))
+                        }
+                      />
+                    </div>
+                    <EditorField
+                      label="Description"
+                      value={project.description}
+                      multiline
+                      rows={3}
+                      onChange={(value) =>
+                        updateProject(index, (entry) => ({ ...entry, description: value }))
+                      }
+                    />
+                    <SkillsCommaInput
+                      skills={project.technologies ?? []}
+                      onSkillsChange={(technologies) =>
+                        updateProject(index, (entry) => ({ ...entry, technologies }))
+                      }
+                    />
+                  </div>
+                ))}
+                <AddItemButton label="Add project" onClick={addProject} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {inactiveOptionalSections.length > 0 && (
+          <div className="pt-2 border-t border-border/40">
+            <p className="text-xs text-muted-foreground mb-2">Add optional section</p>
+            <div className="flex flex-wrap gap-2">
+              {inactiveOptionalSections.map((section) => (
+                <button
+                  key={section}
+                  type="button"
+                  onClick={() => addOptionalSection(section)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-muted/40 border border-border/50 text-foreground hover:border-accent/50 hover:text-accent transition-colors"
+                >
+                  + {SECTION_DISPLAY_NAMES[section]}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

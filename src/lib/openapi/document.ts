@@ -99,6 +99,20 @@ const optimizedResumeSchema: OpenAPIV3.SchemaObject = {
         },
       },
     },
+    languages: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['language', 'level'],
+        properties: {
+          language: { type: 'string' },
+          level: {
+            type: 'string',
+            enum: ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', 'Native'],
+          },
+        },
+      },
+    },
     keywords: { type: 'array', items: { type: 'string' } },
     matchScore: { type: 'integer', minimum: 0, maximum: 100 },
     language: { type: 'string', example: 'en' },
